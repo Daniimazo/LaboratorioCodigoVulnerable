@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Buscar estudiantes{% endblock %}
+{% block contenido %}
+    <h1>Buscar estudiantes</h1>
+    <form method="GET" action="{{ url_for('buscar') }}">
+        <input type="text" name="q" value="{{ termino }}" placeholder="Nombre del estudiante">
+        <button type="submit">Buscar</button>
+    </form>
+
+    {% if query %}
+        <p class="pista">SQL ejecutado: <code>{{ query }}</code></p>
+    {% endif %}
+
+    {% if resultados %}
+        <table>
+            <tr><th>ID</th><th>Nombre</th><th>Carrera</th><th>Biografia</th><th>Acciones</th></tr>
+            {% for r in resultados %}
+                <tr>
+                    <td>{{ r[0] }}</td>
+                    <td>{{ r[1] }}</td>
+                    <td>{{ r[2] }}</td>
+                    <td>{{ r[3] }}</td>
+                    <td><a href="{{ url_for('perfil', id=r[0]) }}">Ver perfil</a></td>
+                </tr>
+            {% endfor %}
+        </table>
+    {% elif termino %}
+        <p>Sin resultados.</p>
+    {% endif %}
+{% endblock %}

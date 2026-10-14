@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Editar nota{% endblock %}
+{% block contenido %}
+    <h1>Editar calificacion #{{ calificacion['id'] }}</h1>
+    <p><strong>Materia:</strong> {{ calificacion['materia'] }}</p>
+    <p><strong>Estudiante ID:</strong> {{ calificacion['estudiante_id'] }}</p>
+    <form method="POST" action="{{ url_for('editar_nota', id=calificacion['id']) }}">
+        <label>Nueva nota:
+            <input type="text" name="nota" value="{{ calificacion['nota'] }}">
+        </label>
+        <button type="submit">Guardar</button>
+    </form>
+    <p class="pista">Pista de laboratorio: cambia el numero de la URL (por ejemplo /nota/editar/1 -&gt; /nota/editar/2) sin iniciar sesion.</p>
+{% endblock %}

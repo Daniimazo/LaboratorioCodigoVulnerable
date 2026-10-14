@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Subir archivo{% endblock %}
+{% block contenido %}
+    <h1>Subir archivo</h1>
+    {% if mensaje %}
+        <p class="ok">{{ mensaje }}</p>
+    {% endif %}
+    <form method="POST" action="{{ url_for('subir') }}" enctype="multipart/form-data">
+        <input type="file" name="archivo">
+        <button type="submit">Subir</button>
+    </form>
+    <p class="pista">Pista de laboratorio: intenta subir un archivo <code>.py</code> o <code>.php</code>. El sistema no lo impide.</p>
+{% endblock %}

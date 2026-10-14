@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Iniciar sesion{% endblock %}
+{% block contenido %}
+    <h1>Iniciar sesion</h1>
+    {% if error %}
+        <p class="error">{{ error }}</p>
+    {% endif %}
+    <form method="POST" action="{{ url_for('login') }}">
+        <label>Usuario:
+            <input type="text" name="username" autocomplete="off">
+        </label>
+        <label>Contrasena:
+            <input type="text" name="password" autocomplete="off">
+        </label>
+        <button type="submit">Entrar</button>
+    </form>
+    <p class="pista">Pista de laboratorio: prueba escribir <code>admin' --</code> en el campo usuario.</p>
+{% endblock %}

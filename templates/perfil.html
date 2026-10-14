@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Perfil de {{ estudiante['nombre'] }}{% endblock %}
+{% block contenido %}
+    <h1>Perfil: {{ estudiante['nombre'] }}</h1>
+    <p><strong>Carrera:</strong> {{ estudiante['carrera'] }}</p>
+
+    <h2>Biografia</h2>
+    <!-- VULNERABLE: "| safe" desactiva el escape de Jinja2 -> XSS almacenado -->
+    <div class="biografia">{{ estudiante['biografia'] | safe }}</div>
+
+    <p><a href="{{ url_for('editar_biografia', id=estudiante['id']) }}">Editar biografia</a></p>
+
+    <h2>Calificaciones</h2>
+    <table>
+        <tr><th>ID nota</th><th>Materia</th><th>Nota</th><th>Accion</th></tr>
+        {% for n in notas %}
+            <tr>
+                <td>{{ n['id'] }}</td>
+                <td>{{ n['materia'] }}</td>
+                <td>{{ n['nota'] }}</td>
+                <td><a href="{{ url_for('editar_nota', id=n['id']) }}">Editar nota</a></td>
+            </tr>
+        {% endfor %}
+    </table>
+{% endblock %}

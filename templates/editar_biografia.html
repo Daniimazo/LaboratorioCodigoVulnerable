@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Editar biografia{% endblock %}
+{% block contenido %}
+    <h1>Editar biografia de {{ estudiante['nombre'] }}</h1>
+    <form method="POST" action="{{ url_for('editar_biografia', id=estudiante['id']) }}">
+        <textarea name="biografia" rows="5" cols="50">{{ estudiante['biografia'] }}</textarea>
+        <button type="submit">Guardar</button>
+    </form>
+    <p class="pista">Pista de laboratorio: prueba guardar <code>&lt;script&gt;alert('XSS')&lt;/script&gt;</code>.</p>
+{% endblock %}

@@ -1,0 +1,98 @@
+* { box-sizing: border-box; }
+
+body {
+    font-family: Arial, Helvetica, sans-serif;
+    margin: 0;
+    background: #f4f6f8;
+    color: #222;
+}
+
+.banner-alerta {
+    background: #b00020;
+    color: #fff;
+    text-align: center;
+    padding: 8px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+.banner-seguro {
+    background: #047857;
+    color: #fff;
+    text-align: center;
+    padding: 8px;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+}
+
+.menu {
+    background: #1f2937;
+    padding: 10px 16px;
+    display: flex;
+    gap: 16px;
+    align-items: center;
+}
+
+.menu a { color: #e5e7eb; text-decoration: none; }
+.menu a:hover { text-decoration: underline; }
+.menu .usuario { color: #9ca3af; margin-left: auto; }
+
+.contenido {
+    max-width: 800px;
+    margin: 24px auto;
+    background: #fff;
+    padding: 24px;
+    border-radius: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+h1 { color: #1f2937; }
+
+label { display: block; margin: 10px 0; }
+input[type="text"], textarea {
+    padding: 6px;
+    width: 100%;
+    max-width: 360px;
+    border: 1px solid #cbd5e1;
+    border-radius: 4px;
+}
+
+button {
+    background: #2563eb;
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 8px;
+}
+button:hover { background: #1d4ed8; }
+
+table {
+    border-collapse: collapse;
+    width: 100%;
+    margin-top: 12px;
+}
+th, td {
+    border: 1px solid #e5e7eb;
+    padding: 8px;
+    text-align: left;
+}
+th { background: #f1f5f9; }
+
+.error { color: #b00020; font-weight: bold; }
+.ok { color: #047857; font-weight: bold; }
+.pista {
+    background: #fff7ed;
+    border-left: 4px solid #f59e0b;
+    padding: 8px 12px;
+    margin-top: 16px;
+    font-size: 0.9em;
+}
+.biografia {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    padding: 12px;
+    border-radius: 4px;
+}
+code { background: #eef2ff; padding: 2px 4px; border-radius: 3px; }
