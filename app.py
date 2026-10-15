@@ -192,6 +192,7 @@ def subir():
             # VULNERABLE: se acepta cualquier nombre/extension y se guarda
             # el archivo directamente. No hay lista blanca ni validacion.
             ruta = os.path.join(app.config["UPLOAD_FOLDER"], archivo.filename)
+            os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
             archivo.save(ruta)
 
             conn = get_connection()

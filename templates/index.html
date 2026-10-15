@@ -12,8 +12,8 @@
     <ul>
         <li><a href="{{ url_for('login') }}">Login</a> - practica de Inyeccion SQL</li>
         <li><a href="{{ url_for('buscar') }}">Buscar estudiantes</a> - practica de Inyeccion SQL (UNION)</li>
-        <li>Ver perfil - practica de XSS almacenado</li>
-        <li>Editar nota - practica de Control de Acceso Roto (IDOR)</li>
+        <li><a href="{{ url_for('perfil', id=1) }}">Ver perfil</a> - practica de XSS almacenado</li>
+        <li><a href="{{ url_for('editar_nota', id=1) }}">Editar nota</a> - practica de Control de Acceso Roto (IDOR)</li>
         <li><a href="{{ url_for('subir') }}">Subir archivo</a> - practica de Carga sin restriccion</li>
     </ul>
 {% endblock %}
