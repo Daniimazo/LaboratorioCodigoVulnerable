@@ -17,6 +17,9 @@ class Config:
     SESSION_COOKIE_SAMESITE = "Lax"
     SESSION_COOKIE_SECURE = os.environ.get("SESSION_COOKIE_SECURE", "0") == "1"
     PERMANENT_SESSION_LIFETIME = 1800
+    LOGIN_RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 900))
+    LOGIN_ACCOUNT_FAILURES = int(os.environ.get("LOGIN_ACCOUNT_FAILURES", 5))
+    LOGIN_ADDRESS_FAILURES = int(os.environ.get("LOGIN_ADDRESS_FAILURES", 20))
 
 
 class DevelopmentConfig(Config):
