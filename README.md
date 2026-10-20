@@ -6,7 +6,45 @@ Aplicación demostrativa construida con Flask y SQLite. Permite iniciar sesión 
 
 ## Inicio rápido
 
+<<<<<<< HEAD
 Requisitos: Python 3.10 o superior y Flask 3.x.
+=======
+## Roles y permisos
+
+La autorizacion se verifica en el servidor. Ocultar un enlace en la interfaz ayuda a mantener una navegacion coherente, pero no sustituye el control de acceso de las rutas.
+
+| Accion | `admin` | `docente` | `estudiante` |
+| --- | --- | --- | --- |
+| Abrir el inicio | Si | Si | Si |
+| Buscar en el directorio | Si | Si | No (HTTP 403) |
+| Consultar perfiles | Todos | Todos | Solo su propio perfil |
+| Editar biografias | Cualquier perfil | No | Solo la propia |
+| Editar calificaciones | Si | Si | No |
+| Subir archivos | Si | Si | No |
+
+Para identificar el perfil propio, el sistema compara el nombre de usuario de la sesion con el nombre completo del perfil, sin distinguir mayusculas/minusculas. Por ejemplo, la cuenta `Ana Torres` corresponde al perfil `Ana Torres`. Un estudiante que intenta abrir el perfil de otra persona recibe una respuesta 404; si intenta editar una biografia no autorizada recibe 403. El admin puede editar cualquier biografia. El rol docente puede consultar perfiles, editar calificaciones y subir archivos, pero no editar biografias.
+
+El menu de un estudiante muestra un enlace directo a **Mi perfil**, no el directorio. Si su cuenta no coincide con ningun perfil, la pagina de inicio le indica que contacte al administrador; no se le asigna automaticamente otro perfil.
+
+## Busqueda de estudiantes
+
+La busqueda esta disponible para `admin` y `docente`; los estudiantes no pueden acceder ni directamente a `/buscar`. El campo HTML admite hasta 100 caracteres; el servidor recorta espacios al principio y al final. Las consultas SQL usan parametros, escapan `\`, `%` y `_` para tratarlos como texto literal y devuelven como maximo 100 coincidencias ordenadas por nombre. Los perfiles y resultados se siguen protegiendo con autenticacion y autorizacion por rol.
+
+## Cuentas de ejemplo
+
+En la base de datos de desarrollo se registraron cuentas con el nombre completo como usuario para que la verificacion de propiedad funcione. Los usuarios y roles de referencia son:
+
+| Usuario / perfil | Rol | Contraseña |
+| --- | --- | --- |
+| `admin` | `admin` | `admin123` |
+| `profesor` | `docente` | `clave456` |
+| `estudiante` | `estudiante` | `1234` |
+| `Ana Torres` | `estudiante` | `Roble!Limon_73Nube#Azul` |
+| `Luis Gomez` | `estudiante` | `Rio#Cedro_58Menta!Sol` |
+| `Maria Ruiz` | `estudiante` | `Cobre!Nube_92Pino#Luz` |
+
+La base de datos local puede contener cuentas distintas o adicionales. Las contrasenas no se documentan ni se guardan en el repositorio. Para crear una cuenta, usa `create_user`; para asignar o restablecer una contrasena, ejecuta el siguiente comando por cuenta. Se solicita sin mostrarla y se guarda unicamente su hash:
+>>>>>>> efb1a750dad7f608af556d2bb789208ece0c40bf
 
 ```powershell
 py -m venv .venv
