@@ -1,7 +1,4 @@
-"""Create or reset local-only demonstration accounts.
-
-Never use these public credentials in production.
-"""
+"""Create or reset local-only demonstration accounts using the ORM."""
 
 import os
 import sys
@@ -9,7 +6,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from database import connection, create_user, init_db, set_user_password
+from app import app
+from database import create_user, init_db, set_user_password
+from extensions import db
+from models import Student, User
 
 
 DEMO_USERS = (
@@ -20,25 +20,17 @@ DEMO_USERS = (
 
 
 def provision(username, password, role, student_id=None):
-    with connection() as conn:
-        user = conn.execute(
-            "SELECT id, rol, estudiante_id FROM usuarios "
-            "WHERE username = ? COLLATE NOCASE",
-            (username,),
-        ).fetchone()
-
+    user = User.query.filter(User.username.collate("NOCASE") == username).first()
     if user is None:
         create_user(username, password, role, student_id=student_id)
         return
-    if user["rol"] != role:
+    if user.rol != role:
         raise RuntimeError(
-            f"La cuenta {username!r} ya existe con el rol {user['rol']!r}; "
-            "no se modifico su rol."
+            f"La cuenta {username!r} ya existe con el rol {user.rol!r}; no se modificó su rol."
         )
-    if role == "estudiante" and user["estudiante_id"] != student_id:
+    if role == "estudiante" and user.estudiante_id != student_id:
         raise RuntimeError(
-            f"La cuenta {username!r} ya esta asociada a otro perfil; "
-            "no se modifico la asociacion."
+            f"La cuenta {username!r} ya está asociada a otro perfil; no se modificó la asociación."
         )
     set_user_password(username, password)
 
@@ -47,37 +39,35 @@ def main():
     if os.environ.get("APP_ENV", "development").lower() == "production":
         raise SystemExit("No se crean cuentas demo cuando APP_ENV=production.")
 
-    init_db()
-    with connection() as conn:
-        profiles = conn.execute(
-            "SELECT id FROM estudiantes WHERE nombre = ? COLLATE NOCASE",
-            ("Perfil de demostracion",),
-        ).fetchall()
+    with app.app_context():
+        init_db()
+        profiles = Student.query.filter(
+            Student.nombre.collate("NOCASE") == "Perfil de demostracion"
+        ).all()
         if len(profiles) > 1:
-            raise RuntimeError("Hay varios perfiles de demostracion; resuelvelos manualmente.")
+            raise RuntimeError("Hay varios perfiles de demostración; resuélvelos manualmente.")
         if profiles:
-            student_id = profiles[0]["id"]
+            student_id = profiles[0].id
         else:
-            cursor = conn.execute(
-                "INSERT INTO estudiantes (nombre, carrera, biografia) VALUES (?, ?, ?)",
-                (
-                    "Perfil de demostracion",
-                    "Ingenieria de Sistemas",
-                    "Perfil de prueba para validar permisos de estudiante.",
-                ),
+            profile = Student(
+                nombre="Perfil de demostracion",
+                carrera="Ingeniería de Sistemas",
+                biografia="Perfil de prueba para validar permisos de estudiante.",
             )
-            student_id = cursor.lastrowid
+            db.session.add(profile)
+            db.session.commit()
+            student_id = profile.id
 
-    for username, password, role in DEMO_USERS:
-        provision(
-            username,
-            password,
-            role,
-            student_id=student_id if role == "estudiante" else None,
-        )
+        for username, password, role in DEMO_USERS:
+            provision(
+                username,
+                password,
+                role,
+                student_id=student_id if role == "estudiante" else None,
+            )
 
-    print("Cuentas demo locales listas. No las uses en produccion.")
-    for username, password, _ in DEMO_USERS:
+    print("Cuentas demo locales listas. No las uses en producción.")
+    for username, password, _role in DEMO_USERS:
         print(f"  {username}: {password}")
 
 

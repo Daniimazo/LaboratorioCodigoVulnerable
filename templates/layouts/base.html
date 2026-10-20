@@ -10,23 +10,23 @@
 <body>
     <header class="topbar">
         <a class="brand" href="{{ url_for('inicio') }}" aria-label="Gestión académica, inicio">Gestión Académica</a>
-        {% if session.get('username') %}
+        {% if current_user.is_authenticated %}
             <nav class="primary-nav" aria-label="Navegación principal">
                 <a class="nav-link {{ 'is-active' if request.endpoint == 'inicio' else '' }}" href="{{ url_for('inicio') }}">Inicio</a>
-                {% if session.get('rol') == 'estudiante' %}
+                {% if current_user.rol == 'estudiante' %}
                     {% if own_profile_id %}<a class="nav-link {{ 'is-active' if request.endpoint in ['perfil', 'editar_biografia'] else '' }}" href="{{ url_for('perfil', id=own_profile_id) }}">Mi perfil</a>{% endif %}
                 {% else %}
                     <a class="nav-link {{ 'is-active' if request.endpoint in ['buscar', 'perfil'] else '' }}" href="{{ url_for('buscar') }}">Estudiantes</a>
                 {% endif %}
-                {% if session.get('rol') in ['admin', 'docente'] %}
+                {% if current_user.rol in ['admin', 'docente'] %}
                     <a class="nav-link {{ 'is-active' if request.endpoint == 'subir' else '' }}" href="{{ url_for('subir') }}">Archivos</a>
                 {% endif %}
             </nav>
         {% endif %}
         <div class="account-area">
-            {% if session.get('username') %}
-                <span class="account-avatar" aria-hidden="true">{{ session.get('username')[0]|upper }}</span>
-                <span class="account-meta"><strong>{{ session.get('username') }}</strong><small>{{ {'admin':'Administrador','docente':'Docente','estudiante':'Estudiante'}.get(session.get('rol'), 'Usuario') }}</small></span>
+            {% if current_user.is_authenticated %}
+                <span class="account-avatar" aria-hidden="true">{{ current_user.username[0]|upper }}</span>
+                <span class="account-meta"><strong>{{ current_user.username }}</strong><small>{{ {'admin':'Administrador','docente':'Docente','estudiante':'Estudiante'}.get(current_user.rol, 'Usuario') }}</small></span>
                 <form method="POST" action="{{ url_for('logout') }}" class="logout-form">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="button button-quiet button-small" type="submit">Salir</button>

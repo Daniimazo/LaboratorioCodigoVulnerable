@@ -6,9 +6,9 @@
 {% if termino %}<p class="result-count">{% if resultados %}{{ resultados|length }} resultado{{ 's' if resultados|length != 1 else '' }} para <strong>“{{ termino }}”</strong>{% else %}No encontramos resultados para <strong>“{{ termino }}”</strong>.{% endif %}</p>{% endif %}
 {% if resultados %}<div class="student-grid">
     {% for estudiante in resultados %}<article class="student-card">
-        <div class="student-card-top"><span class="student-avatar avatar-{{ loop.index0 % 4 }}">{{ estudiante['nombre'][0]|upper }}</span><span class="card-arrow">↗</span></div>
-        <span class="eyebrow">{{ estudiante['carrera'] }}</span><h2>{{ estudiante['nombre'] }}</h2><p>{{ estudiante['biografia'] or 'Aún no hay una biografía para este perfil.' }}</p>
-        <a class="text-link" href="{{ url_for('perfil', id=estudiante['id']) }}">Ver perfil <span aria-hidden="true">→</span></a>
+        <div class="student-card-top"><span class="student-avatar avatar-{{ loop.index0 % 4 }}">{{ estudiante.nombre[0]|upper }}</span><span class="card-arrow">↗</span></div>
+        <span class="eyebrow">{{ estudiante.carrera }}</span><h2>{{ estudiante.nombre }}</h2><p>{{ estudiante.biografia or 'Aún no hay una biografía para este perfil.' }}</p>
+        <a class="text-link" href="{{ url_for('perfil', id=estudiante.id) }}">Ver perfil <span aria-hidden="true">→</span></a>
     </article>{% endfor %}
 </div>{% elif not termino %}<div class="empty-state"><span class="empty-icon">⌕</span><h2>¿A quién buscas?</h2><p>Escribe un nombre para explorar los perfiles académicos.</p></div>{% else %}<div class="empty-state"><span class="empty-icon">↗</span><h2>Prueba con otra búsqueda</h2><p>Revisa el nombre o intenta buscar por una parte más corta.</p></div>{% endif %}
 {% endblock %}

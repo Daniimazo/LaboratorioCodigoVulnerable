@@ -1,10 +1,10 @@
 """Secure academic management demo application."""
 
-import os
 import hashlib
 import hmac
+import math
+import os
 import secrets
-import sqlite3
 import time
 import uuid
 from datetime import datetime
@@ -12,12 +12,17 @@ from functools import wraps
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from flask import Flask, abort, flash, g, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from flask_login import current_user, login_required, login_user, logout_user
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
 
 from config import Config, ProductionConfig
-from database import connection, init_db
+from database import init_db
+from extensions import db, login_manager
+from models import Grade, LoginRateLimit, Student, UploadedFile, User
 
 
 app = Flask(__name__)
@@ -25,10 +30,29 @@ app.config.from_object(Config)
 if os.environ.get("APP_ENV", "development").lower() == "production":
     ProductionConfig.validate()
     app.config.from_object(ProductionConfig)
+db.init_app(app)
+login_manager.init_app(app)
 
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 EDIT_ROLES = {"admin", "docente"}
 DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Load the account from the database and reject stale sessions."""
+    try:
+        user = db.session.get(User, int(user_id))
+    except (TypeError, ValueError):
+        return None
+    if user is None or session.get("session_version") != user.session_version:
+        return None
+    return user
+
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    return redirect(url_for("login", next=_request_target()))
 
 
 def csrf_token():
@@ -44,73 +68,42 @@ app.jinja_env.globals["csrf_token"] = csrf_token
 
 @app.context_processor
 def inject_common_template_values():
-    own_profile_id = None
-    user = getattr(g, "user", None)
-    if user and user["rol"] == "estudiante":
-        own_profile_id = user["estudiante_id"]
+    own_profile_id = (
+        current_user.estudiante_id
+        if current_user.is_authenticated and current_user.rol == "estudiante"
+        else None
+    )
     return {"now_year": datetime.now().year, "own_profile_id": own_profile_id}
 
 
 @app.before_request
 def protect_post_requests():
-    if request.endpoint is not None and request.endpoint not in {"login", "static"}:
-        user_id = session.get("user_id")
-        if user_id is None:
-            return redirect(url_for("login", next=_request_target()))
-        with connection() as conn:
-            user = conn.execute(
-                "SELECT id, username, rol, estudiante_id, session_version "
-                "FROM usuarios WHERE id = ?",
-                (user_id,),
-            ).fetchone()
-        if not user or user["session_version"] != session.get("session_version"):
-            session.clear()
-            return redirect(url_for("login", next=_request_target()))
-        g.user = user
-        # Keep presentation data in sync with current database permissions.
-        session["username"] = user["username"]
-        session["rol"] = user["rol"]
     if request.method == "POST":
         expected = session.get("csrf_token")
         submitted = request.form.get("csrf_token", "")
         if not expected or not secrets.compare_digest(expected, submitted):
-            abort(400, description="Token CSRF ausente o invalido.")
-
-
-def login_required(view):
-    @wraps(view)
-    def wrapped(*args, **kwargs):
-        if getattr(g, "user", None) is None:
-            return redirect(url_for("login", next=_request_target()))
-        return view(*args, **kwargs)
-    return wrapped
+            abort(400, description="Token CSRF ausente o inválido.")
 
 
 def roles_required(*roles):
+    """Require a logged-in account whose server-side role is allowed."""
     def decorator(view):
         @wraps(view)
+        @login_required
         def wrapped(*args, **kwargs):
-            user = getattr(g, "user", None)
-            if user is None:
-                return redirect(url_for("login", next=_request_target()))
-            if user["rol"] not in roles:
+            if current_user.rol not in roles:
                 abort(403)
             return view(*args, **kwargs)
         return wrapped
     return decorator
 
 
-def can_edit_biography(estudiante):
-    user = getattr(g, "user", None)
-    return bool(
-        user
-        and (
-            user["rol"] == "admin"
-            or (
-                user["rol"] == "estudiante"
-                and user["estudiante_id"] == estudiante["id"]
-            )
-        )
+def can_edit_biography(student):
+    if not current_user.is_authenticated:
+        return False
+    return current_user.rol == "admin" or (
+        current_user.rol == "estudiante"
+        and current_user.estudiante_id == student.id
     )
 
 
@@ -120,52 +113,59 @@ def _login_limit_keys(username):
     address_id = hmac.new(
         secret, (request.remote_addr or "unknown").encode("utf-8"), hashlib.sha256
     ).hexdigest()
-    return ((f"account:{account_id}", app.config["LOGIN_ACCOUNT_FAILURES"]),
-            (f"address:{address_id}", app.config["LOGIN_ADDRESS_FAILURES"]))
+    return (
+        (f"account:{account_id}", app.config["LOGIN_ACCOUNT_FAILURES"]),
+        (f"address:{address_id}", app.config["LOGIN_ADDRESS_FAILURES"]),
+    )
 
 
 def _login_is_limited(keys, now):
-    with connection() as conn:
-        conn.execute(
-            "DELETE FROM login_rate_limits WHERE window_started < ? AND blocked_until < ?",
-            (now - app.config["LOGIN_RATE_LIMIT_WINDOW_SECONDS"], now),
-        )
-        return any(
-            (row := conn.execute(
-                "SELECT blocked_until FROM login_rate_limits WHERE key = ?", (key,)
-            ).fetchone()) is not None and row["blocked_until"] > now
-            for key, _limit in keys
-        )
+    cutoff = now - app.config["LOGIN_RATE_LIMIT_WINDOW_SECONDS"]
+    LoginRateLimit.query.filter(
+        LoginRateLimit.window_started < cutoff,
+        LoginRateLimit.blocked_until < now,
+    ).delete(synchronize_session=False)
+    limited = any(
+        (row := db.session.get(LoginRateLimit, key)) is not None
+        and row.blocked_until > now
+        for key, _limit in keys
+    )
+    db.session.commit()
+    return limited
 
 
 def _record_login_failure(keys, now):
     window = app.config["LOGIN_RATE_LIMIT_WINDOW_SECONDS"]
-    with connection() as conn:
-        conn.execute("BEGIN IMMEDIATE")
+    # Serialize updates so concurrent failed logins cannot lose an increment.
+    try:
+        # End the read transaction opened by the account lookup before asking
+        # SQLite for its write lock.
+        db.session.rollback()
+        db.session.execute(text("BEGIN IMMEDIATE"))
         for key, limit in keys:
-            row = conn.execute(
-                "SELECT failures, window_started, blocked_until "
-                "FROM login_rate_limits WHERE key = ?",
-                (key,),
-            ).fetchone()
-            if row is None or now - row["window_started"] >= window:
-                conn.execute(
-                    "INSERT OR REPLACE INTO login_rate_limits "
-                    "(key, failures, window_started, blocked_until) VALUES (?, 1, ?, 0)",
-                    (key, now),
-                )
+            row = db.session.get(LoginRateLimit, key)
+            if row is None or now - row.window_started >= window:
+                if row is None:
+                    row = LoginRateLimit(key=key, failures=1, window_started=now, blocked_until=0)
+                    db.session.add(row)
+                else:
+                    row.failures, row.window_started, row.blocked_until = 1, now, 0
                 continue
-            failures = row["failures"] + 1
-            blocked_until = now + window if failures >= limit else row["blocked_until"]
-            conn.execute(
-                "UPDATE login_rate_limits SET failures = ?, blocked_until = ? WHERE key = ?",
-                (failures, blocked_until, key),
-            )
+            row.failures += 1
+            if row.failures >= limit:
+                row.blocked_until = now + window
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception("No se pudo actualizar el límite de intentos de inicio de sesión")
+        raise
 
 
 def _clear_account_login_failures(keys):
-    with connection() as conn:
-        conn.execute("DELETE FROM login_rate_limits WHERE key = ?", (keys[0][0],))
+    row = db.session.get(LoginRateLimit, keys[0][0])
+    if row is not None:
+        db.session.delete(row)
+        db.session.commit()
 
 
 def _safe_next_path(destination):
@@ -201,7 +201,7 @@ def _file_signature_matches(upload, extension):
 @app.route("/")
 @login_required
 def inicio():
-    return render_template("features/home/index.html", usuario=session.get("username"))
+    return render_template("features/home/index.html", usuario=current_user.username)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -212,159 +212,145 @@ def login():
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
         now = time.time()
-        keys = _login_limit_keys(username)
+        keys = _login_limit_keys(username[:256])
         limited = _login_is_limited(keys, now)
         user = None
         if not limited and len(username) <= 80 and len(password) <= 1024:
-            with connection() as conn:
-                user = conn.execute(
-                    "SELECT id, username, password, rol, estudiante_id, session_version "
-                    "FROM usuarios WHERE username = ? COLLATE NOCASE",
-                    (username,),
-                ).fetchone()
-        password_matches = False
-        if not limited and len(password) <= 1024:
-            password_matches = check_password_hash(
-                user["password"] if user else DUMMY_PASSWORD_HASH,
-                password,
-            )
+            user = User.query.filter(User.username.collate("NOCASE") == username).first()
+
+        stored_hash = user.password if user else DUMMY_PASSWORD_HASH
+        password_matches = (
+            check_password_hash(stored_hash, password[:1024]) if not limited else False
+        )
         if not limited and user and password_matches:
             session.clear()
             session.permanent = True
-            session["user_id"] = user["id"]
-            session["username"] = user["username"]
-            session["rol"] = user["rol"]
-            session["session_version"] = user["session_version"]
+            session["session_version"] = user.session_version
+            login_user(user, fresh=True)
             session["csrf_token"] = secrets.token_urlsafe(32)
             _clear_account_login_failures(keys)
             destination = _safe_next_path(next_path)
-            if destination:
-                return redirect(destination)
-            return redirect(url_for("inicio"))
+            return redirect(destination or url_for("inicio"))
+
         if not limited:
             _record_login_failure(keys, now)
-        flash("Credenciales invalidas o demasiados intentos. Revisa los datos e intenta de nuevo.", "error")
+        flash("Credenciales inválidas o demasiados intentos. Revisa los datos e intenta de nuevo.", "error")
     return render_template("features/auth/login.html", next_path=next_path)
 
 
 @app.post("/logout")
 @login_required
 def logout():
+    logout_user()
     session.clear()
-    return redirect(url_for("inicio"))
+    return redirect(url_for("login"))
 
 
 @app.route("/buscar")
-@login_required
+@roles_required("admin", "docente")
 def buscar():
-    if g.user["rol"] == "estudiante":
-        abort(403)
-    termino = request.args.get("q", "").strip()
+    termino = request.args.get("q", "").strip()[:100]
     resultados = []
     if termino:
-        # Escape LIKE metacharacters so input is treated as literal text.
         patron = termino.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        with connection() as conn:
-            resultados = conn.execute(
-                "SELECT id, nombre, carrera, biografia FROM estudiantes "
-                "WHERE nombre LIKE ? ESCAPE '\\' ORDER BY nombre LIMIT 100",
-                (f"%{patron}%",),
-            ).fetchall()
+        resultados = Student.query.filter(
+            Student.nombre.like(f"%{patron}%", escape="\\")
+        ).order_by(Student.nombre).limit(100).all()
     return render_template("features/students/search.html", resultados=resultados, termino=termino)
 
 
 @app.route("/perfil/<int:id>")
 @login_required
 def perfil(id):
-    with connection() as conn:
-        estudiante = conn.execute("SELECT * FROM estudiantes WHERE id = ?", (id,)).fetchone()
-        notas = conn.execute(
-            "SELECT * FROM calificaciones WHERE estudiante_id = ? ORDER BY id", (id,)
-        ).fetchall()
-    if not estudiante:
+    student = db.session.get(Student, id)
+    if student is None:
         abort(404)
-    if g.user["rol"] == "estudiante" and not can_edit_biography(estudiante):
+    if current_user.rol == "estudiante" and current_user.estudiante_id != student.id:
         abort(404)
+    grades = Grade.query.filter_by(estudiante_id=id).order_by(Grade.id).all()
     return render_template(
         "features/students/profile.html",
-        estudiante=estudiante,
-        notas=notas,
-        puede_editar_biografia=can_edit_biography(estudiante),
+        estudiante=student,
+        notas=grades,
+        puede_editar_biografia=can_edit_biography(student),
     )
 
 
 @app.route("/perfil/<int:id>/editar", methods=["GET", "POST"])
 @login_required
 def editar_biografia(id):
-    with connection() as conn:
-        estudiante = conn.execute("SELECT * FROM estudiantes WHERE id = ?", (id,)).fetchone()
-        if not estudiante:
-            abort(404)
-        if not can_edit_biography(estudiante):
-            abort(403)
-        if request.method == "POST":
-            bio = request.form.get("biografia", "")
-            if len(bio) > 2000:
-                flash("La biografia no puede superar 2000 caracteres.", "error")
-                return render_template("features/students/edit_biography.html", estudiante=estudiante), 400
-            conn.execute("UPDATE estudiantes SET biografia = ? WHERE id = ?", (bio, id))
-            flash("Biografia actualizada.", "success")
-            return redirect(url_for("perfil", id=id))
-    return render_template("features/students/edit_biography.html", estudiante=estudiante)
+    student = db.session.get(Student, id)
+    if student is None:
+        abort(404)
+    if not can_edit_biography(student):
+        abort(403)
+    if request.method == "POST":
+        bio = request.form.get("biografia", "")
+        if len(bio) > 2000:
+            flash("La biografía no puede superar 2000 caracteres.", "error")
+            return render_template("features/students/edit_biography.html", estudiante=student), 400
+        student.biografia = bio
+        db.session.commit()
+        flash("Biografía actualizada.", "success")
+        return redirect(url_for("perfil", id=id))
+    return render_template("features/students/edit_biography.html", estudiante=student)
 
 
 @app.route("/nota/editar/<int:id>", methods=["GET", "POST"])
 @roles_required(*EDIT_ROLES)
 def editar_nota(id):
-    with connection() as conn:
-        calificacion = conn.execute("SELECT * FROM calificaciones WHERE id = ?", (id,)).fetchone()
-        if not calificacion:
-            abort(404)
-        if request.method == "POST":
-            try:
-                nueva_nota = float(request.form.get("nota", ""))
-            except ValueError:
-                nueva_nota = -1
-            if not 0 <= nueva_nota <= 5:
-                flash("La nota debe ser un numero entre 0 y 5.", "error")
-                return render_template("features/grades/edit.html", calificacion=calificacion), 400
-            conn.execute("UPDATE calificaciones SET nota = ? WHERE id = ?", (nueva_nota, id))
-            flash("Nota actualizada.", "success")
-            return redirect(url_for("perfil", id=calificacion["estudiante_id"]))
-    return render_template("features/grades/edit.html", calificacion=calificacion)
+    grade = db.session.get(Grade, id)
+    if grade is None:
+        abort(404)
+    if request.method == "POST":
+        try:
+            new_grade = float(request.form.get("nota", ""))
+        except ValueError:
+            new_grade = -1
+        if not math.isfinite(new_grade) or not 0 <= new_grade <= 5:
+            flash("La nota debe ser un número entre 0 y 5.", "error")
+            return render_template("features/grades/edit.html", calificacion=grade), 400
+        grade.nota = new_grade
+        db.session.commit()
+        flash("Nota actualizada.", "success")
+        return redirect(url_for("perfil", id=grade.estudiante_id))
+    return render_template("features/grades/edit.html", calificacion=grade)
 
 
 @app.route("/subir", methods=["GET", "POST"])
 @roles_required("admin", "docente")
 def subir():
     if request.method == "POST":
-        archivo = request.files.get("archivo")
-        if not archivo or not archivo.filename:
+        upload = request.files.get("archivo")
+        if not upload or not upload.filename:
             flash("Selecciona un archivo.", "error")
             return redirect(url_for("subir"))
-        safe_name = secure_filename(archivo.filename)
+        safe_name = secure_filename(upload.filename)
         if not safe_name or "." not in safe_name:
-            flash("Nombre de archivo no valido.", "error")
+            flash("Nombre de archivo no válido.", "error")
             return redirect(url_for("subir"))
         extension = safe_name.rsplit(".", 1)[1].lower()
         if extension not in ALLOWED_EXTENSIONS:
             flash("Tipo de archivo no permitido. Usa PDF, PNG o JPG.", "error")
             return redirect(url_for("subir"))
-        if not _file_signature_matches(archivo, extension):
+        if not _file_signature_matches(upload, extension):
             flash("El contenido no coincide con el formato indicado.", "error")
             return redirect(url_for("subir"))
+
         stored_name = f"{uuid.uuid4().hex}.{extension}"
         upload_dir = Path(app.config["UPLOAD_FOLDER"]).resolve()
         upload_dir.mkdir(parents=True, exist_ok=True)
         destination = upload_dir / stored_name
-        archivo.save(destination)
+        upload.save(destination)
         try:
-            with connection() as conn:
-                conn.execute(
-                    "INSERT INTO archivos (nombre_archivo, ruta, subido_por) VALUES (?, ?, ?)",
-                    (safe_name, str(destination), session["user_id"]),
-                )
-        except sqlite3.Error:
+            db.session.add(UploadedFile(
+                nombre_archivo=safe_name,
+                ruta=str(destination),
+                subido_por=current_user.id,
+            ))
+            db.session.commit()
+        except SQLAlchemyError:
+            db.session.rollback()
             destination.unlink(missing_ok=True)
             app.logger.exception("No se pudo registrar el archivo cargado")
             abort(500)
@@ -375,9 +361,11 @@ def subir():
 
 @app.errorhandler(413)
 def request_too_large(_error):
-    return "El archivo supera el limite permitido (5 MB).", 413
+    limit_mb = app.config["MAX_CONTENT_LENGTH"] // (1024 * 1024)
+    return f"El archivo supera el límite permitido ({limit_mb} MB).", 413
 
 
 if __name__ == "__main__":
-    init_db()
+    with app.app_context():
+        init_db()
     app.run(host="127.0.0.1", port=5000, debug=False)
