@@ -1,0 +1,33 @@
+{% extends "layouts/base.html" %}
+{% block title %}Iniciar sesión{% endblock %}
+{% block content %}
+<section class="auth-layout" aria-labelledby="login-title">
+    <div class="auth-aside">
+        <div class="auth-brand-mark" aria-hidden="true">ga</div>
+        <span class="eyebrow eyebrow-light"><span class="status-dot"></span> PLATAFORMA ACADÉMICA</span>
+        <h1>Tu próximo<br>paso empieza aquí.</h1>
+        <p>Un espacio para acompañar tu camino académico y todo lo que viene.</p>
+        <div class="auth-aside-note" aria-hidden="true">
+            <span class="auth-note-icon">✦</span>
+            <span><strong>Crece a tu ritmo</strong><small>Tu recorrido, siempre contigo.</small></span>
+            <span class="auth-note-arrow">↗</span>
+        </div>
+        <span class="auth-aside-mark" aria-hidden="true">✦</span>
+    </div>
+    <div class="auth-card">
+        <span class="eyebrow">BIENVENIDO DE NUEVO</span>
+        <h2 id="login-title">Inicia sesión</h2>
+        <p class="muted">Ingresa tus credenciales para continuar.</p>
+        <form method="POST" action="{{ url_for('login') }}" class="stack-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label for="username">Usuario</label>
+            <input id="username" type="text" name="username" autocomplete="username" placeholder="Tu nombre de usuario" required autofocus>
+            <label for="password">Contraseña</label>
+            <input id="password" type="password" name="password" autocomplete="current-password" placeholder="Tu contraseña" required>
+            <button class="button button-primary button-wide" type="submit">Entrar a mi cuenta <span aria-hidden="true">→</span></button>
+        </form>
+        <div class="secure-hint"><span aria-hidden="true">◈</span> Acceso protegido con tu cuenta académica.</div>
+        <p class="auth-help">¿No tienes una cuenta? <strong>Solicita acceso al administrador.</strong></p>
+    </div>
+</section>
+{% endblock %}

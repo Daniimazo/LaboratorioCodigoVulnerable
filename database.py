@@ -103,3 +103,16 @@ def create_user(username, password, role="estudiante"):
             "INSERT INTO usuarios (username, password, rol) VALUES (?, ?, ?)",
             (username, generate_password_hash(password), role),
         )
+
+
+def set_user_password(username, password):
+    """Set a user's password without storing the plaintext password."""
+    if len(password) < 12:
+        raise ValueError("La contrasena debe tener al menos 12 caracteres.")
+    with connection() as conn:
+        result = conn.execute(
+            "UPDATE usuarios SET password = ? WHERE username = ?",
+            (generate_password_hash(password), username),
+        )
+        if result.rowcount == 0:
+            raise ValueError("El usuario no existe.")

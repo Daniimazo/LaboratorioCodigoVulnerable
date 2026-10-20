@@ -4,6 +4,7 @@ import os
 import secrets
 import sqlite3
 import uuid
+from datetime import datetime
 from functools import wraps
 from pathlib import Path
 
@@ -36,8 +37,25 @@ def csrf_token():
 app.jinja_env.globals["csrf_token"] = csrf_token
 
 
+@app.context_processor
+def inject_common_template_values():
+    own_profile_id = None
+    if session.get("rol") == "estudiante":
+        with connection() as conn:
+            profile = conn.execute(
+                "SELECT id FROM estudiantes WHERE nombre = ? COLLATE NOCASE",
+                (session.get("username", ""),),
+            ).fetchone()
+        if profile:
+            own_profile_id = profile["id"]
+    return {"now_year": datetime.now().year, "own_profile_id": own_profile_id}
+
+
 @app.before_request
 def protect_post_requests():
+    if request.endpoint is not None and request.endpoint not in {"login", "static"}:
+        if "user_id" not in session:
+            return redirect(url_for("login", next=request.path))
     if request.method == "POST":
         expected = session.get("csrf_token")
         submitted = request.form.get("csrf_token", "")
@@ -67,9 +85,17 @@ def roles_required(*roles):
     return decorator
 
 
+def can_edit_biography(estudiante):
+    return (
+        session.get("rol") == "admin"
+        or session.get("username", "").casefold() == estudiante["nombre"].casefold()
+    )
+
+
 @app.route("/")
+@login_required
 def inicio():
-    return render_template("index.html", usuario=session.get("username"))
+    return render_template("features/home/index.html", usuario=session.get("username"))
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -94,7 +120,7 @@ def login():
                 return redirect(destination)
             return redirect(url_for("inicio"))
         flash("Credenciales invalidas.", "error")
-    return render_template("login.html")
+    return render_template("features/auth/login.html")
 
 
 @app.post("/logout")
@@ -105,7 +131,10 @@ def logout():
 
 
 @app.route("/buscar")
+@login_required
 def buscar():
+    if session.get("rol") == "estudiante":
+        abort(403)
     termino = request.args.get("q", "").strip()
     resultados = []
     if termino:
@@ -117,10 +146,11 @@ def buscar():
                 "WHERE nombre LIKE ? ESCAPE '\\' ORDER BY nombre LIMIT 100",
                 (f"%{patron}%",),
             ).fetchall()
-    return render_template("buscar.html", resultados=resultados, termino=termino)
+    return render_template("features/students/search.html", resultados=resultados, termino=termino)
 
 
 @app.route("/perfil/<int:id>")
+@login_required
 def perfil(id):
     with connection() as conn:
         estudiante = conn.execute("SELECT * FROM estudiantes WHERE id = ?", (id,)).fetchone()
@@ -129,25 +159,34 @@ def perfil(id):
         ).fetchall()
     if not estudiante:
         abort(404)
-    return render_template("perfil.html", estudiante=estudiante, notas=notas)
+    if session.get("rol") == "estudiante" and not can_edit_biography(estudiante):
+        abort(404)
+    return render_template(
+        "features/students/profile.html",
+        estudiante=estudiante,
+        notas=notas,
+        puede_editar_biografia=can_edit_biography(estudiante),
+    )
 
 
 @app.route("/perfil/<int:id>/editar", methods=["GET", "POST"])
-@roles_required(*EDIT_ROLES)
+@login_required
 def editar_biografia(id):
     with connection() as conn:
         estudiante = conn.execute("SELECT * FROM estudiantes WHERE id = ?", (id,)).fetchone()
         if not estudiante:
             abort(404)
+        if not can_edit_biography(estudiante):
+            abort(403)
         if request.method == "POST":
             bio = request.form.get("biografia", "")
             if len(bio) > 2000:
                 flash("La biografia no puede superar 2000 caracteres.", "error")
-                return render_template("editar_biografia.html", estudiante=estudiante), 400
+                return render_template("features/students/edit_biography.html", estudiante=estudiante), 400
             conn.execute("UPDATE estudiantes SET biografia = ? WHERE id = ?", (bio, id))
             flash("Biografia actualizada.", "success")
             return redirect(url_for("perfil", id=id))
-    return render_template("editar_biografia.html", estudiante=estudiante)
+    return render_template("features/students/edit_biography.html", estudiante=estudiante)
 
 
 @app.route("/nota/editar/<int:id>", methods=["GET", "POST"])
@@ -164,11 +203,11 @@ def editar_nota(id):
                 nueva_nota = -1
             if not 0 <= nueva_nota <= 5:
                 flash("La nota debe ser un numero entre 0 y 5.", "error")
-                return render_template("editar_nota.html", calificacion=calificacion), 400
+                return render_template("features/grades/edit.html", calificacion=calificacion), 400
             conn.execute("UPDATE calificaciones SET nota = ? WHERE id = ?", (nueva_nota, id))
             flash("Nota actualizada.", "success")
             return redirect(url_for("perfil", id=calificacion["estudiante_id"]))
-    return render_template("editar_nota.html", calificacion=calificacion)
+    return render_template("features/grades/edit.html", calificacion=calificacion)
 
 
 @app.route("/subir", methods=["GET", "POST"])
@@ -204,7 +243,7 @@ def subir():
             abort(500)
         flash("Archivo cargado correctamente.", "success")
         return redirect(url_for("subir"))
-    return render_template("subir.html")
+    return render_template("features/uploads/upload.html")
 
 
 @app.errorhandler(413)

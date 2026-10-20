@@ -2,22 +2,83 @@
 
 Aplicacion educativa en Flask y SQLite que muestra controles de seguridad para una gestion academica basica. La version anterior del laboratorio contenia SQL injection, XSS almacenado, acceso directo inseguro a notas y carga de archivos sin restricciones. Esta version aplica controles para reducir esos riesgos.
 
-## Controles definidos
+## Seguridad, autenticacion y sesiones
 
-1. **Autenticacion:** el login consulta el usuario mediante parametros SQL y verifica la contrasena con Werkzeug. La sesion se limpia antes de crear una sesion autenticada nueva y expira tras 30 minutos.
-2. **RBAC (control de acceso por roles):** solo `admin` y `docente` pueden editar biografias, cambiar notas o subir archivos. Las comprobaciones se hacen en el servidor con decoradores; ocultar enlaces en la plantilla solo mejora la interfaz y no sustituye la autorizacion.
-3. **Hashing de contrasenas:** las nuevas cuentas se crean con `create_user`, que usa `generate_password_hash`. Al iniciar, `init_db` convierte contrasenas antiguas en texto plano a hashes Werkzeug sin borrar la base de datos.
-4. **Proteccion contra SQL injection:** todas las consultas que incluyen entrada usan placeholders y parametros. El buscador escapa `%` y `_` para que se interpreten como texto y limita los resultados.
-5. **Proteccion contra XSS:** Jinja2 mantiene el autoescape; se retiro el filtro `safe`. Las biografias se muestran como texto y tienen limite de longitud.
+- La aplicacion exige una sesion autenticada para acceder a sus rutas funcionales. Si no hay sesion, redirige al login y conserva la ruta local solicitada para volver a ella después de autenticarte. El login y los recursos estaticos son publicos.
+- El login busca el usuario con una consulta parametrizada y verifica la contrasena con Werkzeug. Al autenticar, limpia la sesion anterior, guarda el identificador, el nombre y el rol, y genera un token CSRF nuevo.
+- Las contrasenas se guardan como hashes Werkzeug, nunca como texto recuperable. `create_user` exige un minimo de 12 caracteres; `set_user_password` permite cambiarlas sin imprimirlas. `init_db` convierte contrasenas heredadas en texto plano a hashes al inicializar la base de datos.
+- Los formularios POST, incluido login y logout, requieren token CSRF validado con comparacion constante. El cierre de sesion solo acepta POST.
+- Las cookies de sesion son `HttpOnly` y `SameSite=Lax`; en produccion tambien requieren HTTPS (`Secure`). La sesion expira tras 30 minutos.
+- Las plantillas Jinja conservan el autoescape; las biografias se muestran como texto y se limitan a 2000 caracteres.
+- Las actualizaciones de calificaciones validan el rango de 0 a 5. SQLite activa claves foraneas y las conexiones usan transacciones con commit/rollback.
+- La inicializacion crea las tablas y datos de ejemplo que falten sin borrar los registros existentes.
 
-## Controles complementarios
+## Roles y permisos
 
-- Token CSRF en todos los formularios POST, incluido el cierre de sesion.
-- Cookies de sesion `HttpOnly` y `SameSite=Lax`; `Secure` en modo produccion.
-- Carga restringida a PDF, PNG y JPG, nombre saneado, nombre de almacenamiento aleatorio, limite de 5 MB y autorizacion de rol.
-- Notas validadas entre 0 y 5, claves foraneas habilitadas y conexiones SQLite gestionadas con contextos.
-- `config.py` concentra rutas, secreto, limite de carga y opciones de cookies. En produccion se exige `SECRET_KEY`.
-- La base de datos se inicializa de forma no destructiva. Ya no se elimina `academia.db` al preparar el esquema.
+La autorizacion se verifica en el servidor. Ocultar un enlace en la interfaz ayuda a mantener una navegacion coherente, pero no sustituye el control de acceso de las rutas.
+
+| Accion | `admin` | `docente` | `estudiante` |
+| --- | --- | --- | --- |
+| Abrir el inicio | Si | Si | Si |
+| Buscar en el directorio | Si | Si | No (HTTP 403) |
+| Consultar perfiles | Todos | Todos | Solo su propio perfil |
+| Editar biografias | Cualquier perfil | No | Solo la propia |
+| Editar calificaciones | Si | Si | No |
+| Subir archivos | Si | Si | No |
+
+Para identificar el perfil propio, el sistema compara el nombre de usuario de la sesion con el nombre completo del perfil, sin distinguir mayusculas/minusculas. Por ejemplo, la cuenta `Ana Torres` corresponde al perfil `Ana Torres`. Un estudiante que intenta abrir el perfil de otra persona recibe una respuesta 404; si intenta editar una biografia no autorizada recibe 403. El admin puede editar cualquier biografia. El rol docente puede consultar perfiles, editar calificaciones y subir archivos, pero no editar biografias.
+
+El menu de un estudiante muestra un enlace directo a **Mi perfil**, no el directorio. Si su cuenta no coincide con ningun perfil, la pagina de inicio le indica que contacte al administrador; no se le asigna automaticamente otro perfil.
+
+## Busqueda de estudiantes
+
+La busqueda esta disponible para `admin` y `docente`; los estudiantes no pueden acceder ni directamente a `/buscar`. El campo HTML admite hasta 100 caracteres; el servidor recorta espacios al principio y al final. Las consultas SQL usan parametros, escapan `\`, `%` y `_` para tratarlos como texto literal y devuelven como maximo 100 coincidencias ordenadas por nombre. Los perfiles y resultados se siguen protegiendo con autenticacion y autorizacion por rol.
+
+## Cuentas de ejemplo
+
+En la base de datos de desarrollo se registraron cuentas con el nombre completo como usuario para que la verificacion de propiedad funcione. Los usuarios y roles de referencia son:
+
+| Usuario / perfil | Rol |
+| --- | --- |
+| `admin` | `admin` |
+| `profesor` | `docente` |
+| `estudiante` | `estudiante` |
+| `Ana Torres` | `estudiante` |
+| `Luis Gomez` | `estudiante` |
+| `Maria Ruiz` | `estudiante` |
+
+La base de datos local puede contener cuentas distintas o adicionales. Las contrasenas no se documentan ni se guardan en el repositorio. Para crear una cuenta, usa `create_user`; para asignar o restablecer una contrasena, ejecuta el siguiente comando por cuenta. Se solicita sin mostrarla y se guarda unicamente su hash:
+
+```powershell
+python -c "from getpass import getpass; from database import set_user_password; set_user_password(input('Usuario: '), getpass('Nueva contrasena (minimo 12 caracteres): '))"
+```
+
+No reutilices contrasenas de ejemplo en produccion. Configura contrasenas unicas y compartelas con cada titular mediante un canal privado.
+
+## Proteccion de archivos subidos
+
+Solo `admin` y `docente` pueden subir archivos. Se aceptan extensiones PDF, PNG y JPG/JPEG; el nombre original se sanea y el archivo se guarda con un UUID para evitar traversal y sobrescrituras. El limite de peticion predeterminado es 5 MiB. La validacion comprueba la extension, no inspecciona el contenido real; para una aplicacion expuesta se recomienda analizar los archivos y almacenarlos fuera del servidor web.
+
+## Frontend organizado por funcionalidades
+
+Las vistas usan una estructura feature-based: cada carpeta agrupa las páginas y flujos de una funcionalidad, mientras el diseño común vive en layouts y componentes compartidos.
+
+```text
+templates/
+  layouts/base.html              # navegación, cuenta, mensajes y pie
+  components/flash_messages.html # avisos compartidos
+  features/
+    auth/login.html
+    home/index.html
+    students/search.html
+    students/profile.html
+    students/edit_biography.html
+    grades/edit.html
+    uploads/upload.html
+static/style.css                 # estilos responsive y componentes visuales
+```
+
+El layout compartido adapta el menu y los accesos rapidos al rol. Las restricciones del servidor descritas arriba se aplican aunque se intente abrir una URL directamente. El diseño funciona en escritorio y movil y utiliza fuentes del sistema, sin depender de servicios externos.
 
 ## Requisitos
 
@@ -46,7 +107,11 @@ python -m pip install Flask
    python -c "from getpass import getpass; from database import create_user; create_user('admin', getpass('Contrasena (minimo 12 caracteres): '), 'admin')"
    ```
 
-   Las contrasenas nuevas deben tener al menos 12 caracteres. Tambien puedes crear roles `docente` o `estudiante` cambiando el tercer argumento. Si ya existe el usuario, SQLite rechazara el nombre duplicado.
+   Las contrasenas nuevas deben tener al menos 12 caracteres. `create_user(username, password, role)` acepta los roles `admin`, `docente` y `estudiante`; cualquier otro rol se rechaza. Si ya existe el usuario, SQLite rechazara el nombre duplicado. Para asociar una cuenta estudiante con su perfil, utiliza el nombre completo del perfil como username. Ejemplo para crear la cuenta de Ana:
+
+   ```powershell
+   python -c "from getpass import getpass; from database import create_user; create_user('Ana Torres', getpass('Contrasena: '), 'estudiante')"
+   ```
 
 3. Inicia el servidor local:
 
@@ -82,12 +147,11 @@ Variables admitidas:
 
 ## Como se aplicaron los cambios
 
-- Se parametrizaron las consultas de login y busqueda, eliminando la construccion SQL con texto del usuario.
-- Se verifican credenciales con hashes y se agregaron decoradores de autenticacion y roles en los endpoints de escritura.
-- Se agrego un token CSRF a cada formulario que cambia estado y el logout paso a POST.
-- Se retiro `|safe`, se limitaron los campos de texto y se conserva el escape automatico de Jinja.
-- Se valida la extension de cargas, se normaliza el nombre original y se guarda el archivo con un UUID para evitar traversal y sobrescritura por nombre.
-- Se centralizo la configuracion, se desactivo debug y se cambio la inicializacion para preservar los datos existentes y migrar contrasenas en texto plano.
+- Se parametrizaron las consultas de autenticacion, busqueda y acceso a perfiles para separar los datos del SQL.
+- Se centralizo la autenticacion de las rutas y se agregaron verificaciones de rol y propiedad del perfil en el servidor.
+- Se anadio proteccion CSRF a los formularios POST y el cierre de sesion se cambio a POST.
+- Se conservaron el autoescape de Jinja y la validacion de biografias, notas y archivos.
+- Se centralizo la configuracion, se desactivo debug y se hizo no destructiva la inicializacion de la base de datos.
 
 ## Limites conocidos
 
