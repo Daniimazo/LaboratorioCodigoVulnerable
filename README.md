@@ -40,12 +40,12 @@ En la base de datos de desarrollo se registraron cuentas con el nombre completo 
 
 | Usuario / perfil | Rol |
 | --- | --- |
-| `admin` | `admin` |
-| `profesor` | `docente` |
-| `estudiante` | `estudiante` |
-| `Ana Torres` | `estudiante` |
-| `Luis Gomez` | `estudiante` |
-| `Maria Ruiz` | `estudiante` |
+| `admin` | `admin` | `admin123` |
+| `profesor` | `docente` | `clave456` |
+| `estudiante` | `estudiante` | `1234` |
+| `Ana Torres` | `estudiante` | `Roble!Limon_73Nube#Azul` |
+| `Luis Gomez` | `estudiante` | `Rio#Cedro_58Menta!Sol` |
+| `Maria Ruiz` | `estudiante` | `Cobre!Nube_92Pino#Luz` |
 
 La base de datos local puede contener cuentas distintas o adicionales. Las contrasenas no se documentan ni se guardan en el repositorio. Para crear una cuenta, usa `create_user`; para asignar o restablecer una contrasena, ejecuta el siguiente comando por cuenta. Se solicita sin mostrarla y se guarda unicamente su hash:
 
