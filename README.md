@@ -38,8 +38,8 @@ La busqueda esta disponible para `admin` y `docente`; los estudiantes no pueden 
 
 En la base de datos de desarrollo se registraron cuentas con el nombre completo como usuario para que la verificacion de propiedad funcione. Los usuarios y roles de referencia son:
 
-| Usuario / perfil | Rol |
-| --- | --- |
+| Usuario / perfil | Rol | Contraseña |
+| --- | --- | --- |
 | `admin` | `admin` | `admin123` |
 | `profesor` | `docente` | `clave456` |
 | `estudiante` | `estudiante` | `1234` |
