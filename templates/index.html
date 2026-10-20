@@ -2,18 +2,16 @@
 {% block title %}Inicio - Gestion Academica{% endblock %}
 {% block contenido %}
     <h1>Sistema de Gestion Academica</h1>
-    <p>Laboratorio didactico de Seguridad en el Ciclo de Vida del Desarrollo (S-SDLC).</p>
+    <p>Aplicacion educativa con controles de autenticacion y proteccion de datos.</p>
     {% if usuario %}
         <p>Bienvenido, <strong>{{ usuario }}</strong>.</p>
     {% else %}
         <p>No has iniciado sesion. <a href="{{ url_for('login') }}">Inicia sesion aqui</a>.</p>
     {% endif %}
-    <h2>Modulos del laboratorio</h2>
+    <h2>Modulos</h2>
     <ul>
-        <li><a href="{{ url_for('login') }}">Login</a> - practica de Inyeccion SQL</li>
-        <li><a href="{{ url_for('buscar') }}">Buscar estudiantes</a> - practica de Inyeccion SQL (UNION)</li>
-        <li><a href="{{ url_for('perfil', id=1) }}">Ver perfil</a> - practica de XSS almacenado</li>
-        <li><a href="{{ url_for('editar_nota', id=1) }}">Editar nota</a> - practica de Control de Acceso Roto (IDOR)</li>
-        <li><a href="{{ url_for('subir') }}">Subir archivo</a> - practica de Carga sin restriccion</li>
+        <li><a href="{{ url_for('buscar') }}">Buscar estudiantes</a></li>
+        <li><a href="{{ url_for('perfil', id=1) }}">Ver perfil de ejemplo</a></li>
+        {% if session.get('rol') in ['admin', 'docente'] %}<li><a href="{{ url_for('subir') }}">Subir archivo</a></li>{% endif %}
     </ul>
 {% endblock %}

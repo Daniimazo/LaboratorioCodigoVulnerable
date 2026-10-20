@@ -1,215 +1,217 @@
-"""
-app.py  -  VERSION INTENCIONALMENTE VULNERABLE
-==============================================
-Sistema de Gestion Academica para el laboratorio de S-SDLC.
-
-Este archivo contiene, A PROPOSITO, las 4 vulnerabilidades clasicas:
-  1. Inyeccion SQL (SQLi)            -> /login y /buscar
-  2. Cross-Site Scripting (XSS)      -> /perfil/<id>
-  3. Control de acceso roto (IDOR)   -> /nota/editar/<id>
-  4. Carga de archivos sin restriccion -> /subir
-
-USAR SOLO EN UN ENTORNO LOCAL Y AISLADO CON FINES EDUCATIVOS.
-"""
+"""Secure academic management demo application."""
 
 import os
+import secrets
+import sqlite3
+import uuid
+from functools import wraps
+from pathlib import Path
 
-from flask import (
-    Flask,
-    redirect,
-    render_template,
-    request,
-    session,
-    url_for,
-)
+from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
+from werkzeug.security import check_password_hash
+from werkzeug.utils import secure_filename
 
-from database import get_connection, init_db
+from config import Config, ProductionConfig
+from database import connection, init_db
+
 
 app = Flask(__name__)
-app.secret_key = "clave-insegura-de-laboratorio"  # MALA PRACTICA: clave debil y fija
+app.config.from_object(Config)
+if os.environ.get("APP_ENV", "development").lower() == "production":
+    ProductionConfig.validate()
+    app.config.from_object(ProductionConfig)
 
-UPLOAD_FOLDER = "uploads"
-app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
+EDIT_ROLES = {"admin", "docente"}
+
+
+def csrf_token():
+    token = session.get("csrf_token")
+    if token is None:
+        token = secrets.token_urlsafe(32)
+        session["csrf_token"] = token
+    return token
+
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+@app.before_request
+def protect_post_requests():
+    if request.method == "POST":
+        expected = session.get("csrf_token")
+        submitted = request.form.get("csrf_token", "")
+        if not expected or not secrets.compare_digest(expected, submitted):
+            abort(400, description="Token CSRF ausente o invalido.")
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login", next=request.path))
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def roles_required(*roles):
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if "user_id" not in session:
+                return redirect(url_for("login", next=request.path))
+            if session.get("rol") not in roles:
+                abort(403)
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
 
 
 @app.route("/")
 def inicio():
-    """Pagina de inicio con el banner del laboratorio."""
     return render_template("index.html", usuario=session.get("username"))
 
 
-# ======================================================================
-# VULNERABILIDAD 1: INYECCION SQL (SQLi)
-# ======================================================================
 @app.route("/login", methods=["GET", "POST"])
 def login():
-    """Inicio de sesion vulnerable a inyeccion SQL."""
-    error = None
     if request.method == "POST":
-        usuario = request.form.get("username", "")
-        clave = request.form.get("password", "")
-
-        conn = get_connection()
-        cur = conn.cursor()
-
-        # VULNERABLE: la consulta se construye concatenando la entrada del
-        # usuario directamente. Un atacante puede escribir:  admin' --
-        # o tambien:  ' OR '1'='1
-        query = (
-            "SELECT * FROM usuarios WHERE username = '"
-            + usuario
-            + "' AND password = '"
-            + clave
-            + "'"
-        )
-        print("SQL ejecutado:", query)  # para que el estudiante vea la inyeccion
-        cur.execute(query)
-        fila = cur.fetchone()
-        conn.close()
-
-        if fila:
-            session["username"] = fila["username"]
-            session["rol"] = fila["rol"]
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        with connection() as conn:
+            user = conn.execute(
+                "SELECT id, username, password, rol FROM usuarios WHERE username = ?",
+                (username,),
+            ).fetchone()
+        if user and check_password_hash(user["password"], password):
+            session.clear()
+            session["user_id"] = user["id"]
+            session["username"] = user["username"]
+            session["rol"] = user["rol"]
+            session["csrf_token"] = secrets.token_urlsafe(32)
+            destination = request.args.get("next", "")
+            # Only allow local relative paths to prevent open redirects.
+            if destination.startswith("/") and not destination.startswith("//"):
+                return redirect(destination)
             return redirect(url_for("inicio"))
-        error = "Credenciales invalidas"
+        flash("Credenciales invalidas.", "error")
+    return render_template("login.html")
 
-    return render_template("login.html", error=error)
 
-
-@app.route("/logout")
+@app.post("/logout")
+@login_required
 def logout():
     session.clear()
     return redirect(url_for("inicio"))
 
 
-# ======================================================================
-# VULNERABILIDAD 1 (variante): SQLi en el buscador de estudiantes
-# ======================================================================
 @app.route("/buscar")
 def buscar():
-    """Buscador de estudiantes vulnerable a inyeccion SQL."""
-    termino = request.args.get("q", "")
+    termino = request.args.get("q", "").strip()
     resultados = []
-    query = ""
     if termino:
-        conn = get_connection()
-        cur = conn.cursor()
-        # VULNERABLE: se concatena el termino de busqueda en la consulta.
-        # Ejemplo de ataque con UNION para extraer usuarios y contrasenas:
-        #   ' UNION SELECT id, username, password, rol FROM usuarios --
-        query = (
-            "SELECT id, nombre, carrera, biografia FROM estudiantes "
-            "WHERE nombre LIKE '%" + termino + "%'"
-        )
-        print("SQL ejecutado:", query)
-        cur.execute(query)
-        resultados = cur.fetchall()
-        conn.close()
-    return render_template(
-        "buscar.html", resultados=resultados, termino=termino, query=query
-    )
+        # Escape LIKE metacharacters so input is treated as literal text.
+        patron = termino.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        with connection() as conn:
+            resultados = conn.execute(
+                "SELECT id, nombre, carrera, biografia FROM estudiantes "
+                "WHERE nombre LIKE ? ESCAPE '\\' ORDER BY nombre LIMIT 100",
+                (f"%{patron}%",),
+            ).fetchall()
+    return render_template("buscar.html", resultados=resultados, termino=termino)
 
 
-# ======================================================================
-# VULNERABILIDAD 2: CROSS-SITE SCRIPTING (XSS) ALMACENADO
-# ======================================================================
 @app.route("/perfil/<int:id>")
 def perfil(id):
-    """Muestra el perfil de un estudiante SIN escapar la biografia."""
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM estudiantes WHERE id = ?", (id,))
-    estudiante = cur.fetchone()
-    cur.execute("SELECT * FROM calificaciones WHERE estudiante_id = ?", (id,))
-    notas = cur.fetchall()
-    conn.close()
+    with connection() as conn:
+        estudiante = conn.execute("SELECT * FROM estudiantes WHERE id = ?", (id,)).fetchone()
+        notas = conn.execute(
+            "SELECT * FROM calificaciones WHERE estudiante_id = ? ORDER BY id", (id,)
+        ).fetchall()
     if not estudiante:
-        return "Estudiante no encontrado", 404
-    # La plantilla perfil.html imprime la biografia con "| safe",
-    # desactivando el autoescape de Jinja2 -> XSS almacenado.
+        abort(404)
     return render_template("perfil.html", estudiante=estudiante, notas=notas)
 
 
 @app.route("/perfil/<int:id>/editar", methods=["GET", "POST"])
+@roles_required(*EDIT_ROLES)
 def editar_biografia(id):
-    """Permite editar la biografia (fuente del XSS almacenado)."""
-    conn = get_connection()
-    cur = conn.cursor()
-    if request.method == "POST":
-        bio = request.form.get("biografia", "")
-        # Se guarda la biografia tal cual, sin sanear el contenido.
-        cur.execute(
-            "UPDATE estudiantes SET biografia = ? WHERE id = ?", (bio, id)
-        )
-        conn.commit()
-        conn.close()
-        return redirect(url_for("perfil", id=id))
-    cur.execute("SELECT * FROM estudiantes WHERE id = ?", (id,))
-    estudiante = cur.fetchone()
-    conn.close()
+    with connection() as conn:
+        estudiante = conn.execute("SELECT * FROM estudiantes WHERE id = ?", (id,)).fetchone()
+        if not estudiante:
+            abort(404)
+        if request.method == "POST":
+            bio = request.form.get("biografia", "")
+            if len(bio) > 2000:
+                flash("La biografia no puede superar 2000 caracteres.", "error")
+                return render_template("editar_biografia.html", estudiante=estudiante), 400
+            conn.execute("UPDATE estudiantes SET biografia = ? WHERE id = ?", (bio, id))
+            flash("Biografia actualizada.", "success")
+            return redirect(url_for("perfil", id=id))
     return render_template("editar_biografia.html", estudiante=estudiante)
 
 
-# ======================================================================
-# VULNERABILIDAD 3: CONTROL DE ACCESO ROTO (IDOR)
-# ======================================================================
 @app.route("/nota/editar/<int:id>", methods=["GET", "POST"])
+@roles_required(*EDIT_ROLES)
 def editar_nota(id):
-    """
-    Edita una calificacion identificada por su ID en la URL.
-    VULNERABLE: no verifica que el usuario haya iniciado sesion, ni su rol,
-    ni si la calificacion le pertenece. Cualquiera puede cambiar
-    /nota/editar/5 por /nota/editar/6 y modificar la nota de otro.
-    """
-    conn = get_connection()
-    cur = conn.cursor()
-    if request.method == "POST":
-        nueva_nota = request.form.get("nota", "0")
-        cur.execute(
-            "UPDATE calificaciones SET nota = ? WHERE id = ?", (nueva_nota, id)
-        )
-        conn.commit()
-        conn.close()
-        return redirect(url_for("buscar"))
-    cur.execute("SELECT * FROM calificaciones WHERE id = ?", (id,))
-    calificacion = cur.fetchone()
-    conn.close()
-    if not calificacion:
-        return "Calificacion no encontrada", 404
+    with connection() as conn:
+        calificacion = conn.execute("SELECT * FROM calificaciones WHERE id = ?", (id,)).fetchone()
+        if not calificacion:
+            abort(404)
+        if request.method == "POST":
+            try:
+                nueva_nota = float(request.form.get("nota", ""))
+            except ValueError:
+                nueva_nota = -1
+            if not 0 <= nueva_nota <= 5:
+                flash("La nota debe ser un numero entre 0 y 5.", "error")
+                return render_template("editar_nota.html", calificacion=calificacion), 400
+            conn.execute("UPDATE calificaciones SET nota = ? WHERE id = ?", (nueva_nota, id))
+            flash("Nota actualizada.", "success")
+            return redirect(url_for("perfil", id=calificacion["estudiante_id"]))
     return render_template("editar_nota.html", calificacion=calificacion)
 
 
-# ======================================================================
-# VULNERABILIDAD 4: CARGA DE ARCHIVOS SIN RESTRICCION
-# ======================================================================
 @app.route("/subir", methods=["GET", "POST"])
+@roles_required("admin", "docente")
 def subir():
-    """Sube un archivo SIN validar extension ni tipo -> permite .py, .php, etc."""
-    mensaje = None
     if request.method == "POST":
         archivo = request.files.get("archivo")
-        if archivo and archivo.filename:
-            # VULNERABLE: se acepta cualquier nombre/extension y se guarda
-            # el archivo directamente. No hay lista blanca ni validacion.
-            ruta = os.path.join(app.config["UPLOAD_FOLDER"], archivo.filename)
-            os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-            archivo.save(ruta)
+        if not archivo or not archivo.filename:
+            flash("Selecciona un archivo.", "error")
+            return redirect(url_for("subir"))
+        safe_name = secure_filename(archivo.filename)
+        if not safe_name or "." not in safe_name:
+            flash("Nombre de archivo no valido.", "error")
+            return redirect(url_for("subir"))
+        extension = safe_name.rsplit(".", 1)[1].lower()
+        if extension not in ALLOWED_EXTENSIONS:
+            flash("Tipo de archivo no permitido. Usa PDF, PNG o JPG.", "error")
+            return redirect(url_for("subir"))
+        stored_name = f"{uuid.uuid4().hex}.{extension}"
+        upload_dir = Path(app.config["UPLOAD_FOLDER"]).resolve()
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        destination = upload_dir / stored_name
+        archivo.save(destination)
+        try:
+            with connection() as conn:
+                conn.execute(
+                    "INSERT INTO archivos (nombre_archivo, ruta, subido_por) VALUES (?, ?, ?)",
+                    (safe_name, str(destination), session["user_id"]),
+                )
+        except sqlite3.Error:
+            destination.unlink(missing_ok=True)
+            app.logger.exception("No se pudo registrar el archivo cargado")
+            abort(500)
+        flash("Archivo cargado correctamente.", "success")
+        return redirect(url_for("subir"))
+    return render_template("subir.html")
 
-            conn = get_connection()
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO archivos (nombre_archivo, ruta, subido_por) "
-                "VALUES (?, ?, ?)",
-                (archivo.filename, ruta, session.get("username")),
-            )
-            conn.commit()
-            conn.close()
-            mensaje = f"Archivo '{archivo.filename}' subido a {ruta}"
-    return render_template("subir.html", mensaje=mensaje)
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return "El archivo supera el limite permitido (5 MB).", 413
 
 
 if __name__ == "__main__":
-    if not os.path.exists("academia.db"):
-        init_db()
-    # debug=True tambien es una mala practica en produccion (expone la consola)
-    app.run(host="127.0.0.1", port=5000, debug=True)
+    init_db()
+    app.run(host="127.0.0.1", port=5000, debug=False)

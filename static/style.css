@@ -36,6 +36,8 @@ body {
 .menu a { color: #e5e7eb; text-decoration: none; }
 .menu a:hover { text-decoration: underline; }
 .menu .usuario { color: #9ca3af; margin-left: auto; }
+.inline-form { display: inline; margin: 0; }
+.inline-form button { margin-top: 0; }
 
 .contenido {
     max-width: 800px;
@@ -49,7 +51,7 @@ body {
 h1 { color: #1f2937; }
 
 label { display: block; margin: 10px 0; }
-input[type="text"], textarea {
+input[type="text"], input[type="password"], input[type="number"], textarea {
     padding: 6px;
     width: 100%;
     max-width: 360px;

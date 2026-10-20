@@ -1,131 +1,105 @@
-"""
-database.py
------------
-Crea la base de datos SQLite del laboratorio y carga datos de ejemplo.
-
-ADVERTENCIA: Este archivo forma parte de un ENTORNO INTENCIONALMENTE
-VULNERABLE con fines EDUCATIVOS. No usar en produccion.
-"""
+"""SQLite access and non-destructive schema initialization."""
 
 import os
 import sqlite3
+from contextlib import contextmanager
 
-DB_NAME = "academia.db"
+from werkzeug.security import generate_password_hash
+
+from config import Config
 
 
 def get_connection():
-    """Devuelve una conexion a la base de datos SQLite."""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(Config.DATABASE)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
-def init_db():
-    """Crea las tablas y carga los datos de ejemplo desde cero."""
-    if os.path.exists(DB_NAME):
-        os.remove(DB_NAME)
-
+@contextmanager
+def connection():
+    """Commit or roll back a transaction and always close the connection."""
     conn = get_connection()
-    cur = conn.cursor()
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
-    # ------------------------------------------------------------------
-    # Tabla de usuarios (login del sistema)
-    # ------------------------------------------------------------------
-    cur.execute(
-        """
-        CREATE TABLE usuarios (
-            id       INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT NOT NULL,
-            password TEXT NOT NULL,   -- MALA PRACTICA: contrasena en texto plano
-            rol      TEXT NOT NULL    -- admin | docente | estudiante
+
+def init_db():
+    """Create missing tables and hash legacy plaintext passwords in place."""
+    os.makedirs(os.path.dirname(Config.DATABASE) or ".", exist_ok=True)
+    with connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                password TEXT NOT NULL,
+                rol TEXT NOT NULL CHECK (rol IN ('admin', 'docente', 'estudiante'))
+            );
+            CREATE TABLE IF NOT EXISTS estudiantes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre TEXT NOT NULL,
+                carrera TEXT NOT NULL,
+                biografia TEXT
+            );
+            CREATE TABLE IF NOT EXISTS calificaciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                estudiante_id INTEGER NOT NULL,
+                materia TEXT NOT NULL,
+                nota REAL NOT NULL CHECK (nota >= 0 AND nota <= 5),
+                FOREIGN KEY (estudiante_id) REFERENCES estudiantes (id)
+            );
+            CREATE TABLE IF NOT EXISTS archivos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre_archivo TEXT NOT NULL,
+                ruta TEXT NOT NULL,
+                subido_por INTEGER,
+                FOREIGN KEY (subido_por) REFERENCES usuarios (id)
+            );
+            """
         )
-        """
-    )
 
-    # ------------------------------------------------------------------
-    # Tabla de estudiantes
-    # ------------------------------------------------------------------
-    cur.execute(
-        """
-        CREATE TABLE estudiantes (
-            id        INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre    TEXT NOT NULL,
-            carrera   TEXT NOT NULL,
-            biografia TEXT             -- campo libre: sera el punto de XSS almacenado
+        # Upgrade the original lab schema without deleting user data.
+        user_columns = {row[1] for row in conn.execute("PRAGMA table_info(usuarios)")}
+        if "username" in user_columns:
+            for row in conn.execute("SELECT id, password FROM usuarios").fetchall():
+                stored = row["password"]
+                if not stored.startswith(("scrypt:", "pbkdf2:")):
+                    conn.execute(
+                        "UPDATE usuarios SET password = ? WHERE id = ?",
+                        (generate_password_hash(stored), row["id"]),
+                    )
+
+        # Seed public demonstration data only when those tables are empty.
+        if conn.execute("SELECT COUNT(*) FROM estudiantes").fetchone()[0] == 0:
+            conn.executemany(
+                "INSERT INTO estudiantes (nombre, carrera, biografia) VALUES (?, ?, ?)",
+                [
+                    ("Ana Torres", "Ingenieria de Sistemas", "Estudiante de septimo semestre."),
+                    ("Luis Gomez", "Ciberseguridad", "Interesado en pentesting."),
+                    ("Maria Ruiz", "Ciencia de Datos", "Le gusta el machine learning."),
+                ],
+            )
+        if conn.execute("SELECT COUNT(*) FROM calificaciones").fetchone()[0] == 0:
+            conn.executemany(
+                "INSERT INTO calificaciones (estudiante_id, materia, nota) VALUES (?, ?, ?)",
+                [(1, "Redes", 4.2), (1, "Bases de Datos", 3.8), (2, "Criptografia", 4.7), (3, "Estadistica", 3.5)],
+            )
+
+
+def create_user(username, password, role="estudiante"):
+    """Create a user with an application-generated password hash."""
+    if role not in {"admin", "docente", "estudiante"}:
+        raise ValueError("Rol no valido.")
+    if len(password) < 12:
+        raise ValueError("La contrasena debe tener al menos 12 caracteres.")
+    if not username or len(username) > 80:
+        raise ValueError("El usuario debe tener entre 1 y 80 caracteres.")
+    with connection() as conn:
+        conn.execute(
+            "INSERT INTO usuarios (username, password, rol) VALUES (?, ?, ?)",
+            (username, generate_password_hash(password), role),
         )
-        """
-    )
-
-    # ------------------------------------------------------------------
-    # Tabla de calificaciones
-    # ------------------------------------------------------------------
-    cur.execute(
-        """
-        CREATE TABLE calificaciones (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            estudiante_id INTEGER NOT NULL,
-            materia       TEXT NOT NULL,
-            nota          REAL NOT NULL,
-            FOREIGN KEY (estudiante_id) REFERENCES estudiantes (id)
-        )
-        """
-    )
-
-    # ------------------------------------------------------------------
-    # Tabla de archivos subidos
-    # ------------------------------------------------------------------
-    cur.execute(
-        """
-        CREATE TABLE archivos (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre_archivo TEXT NOT NULL,
-            ruta          TEXT NOT NULL,
-            subido_por    INTEGER
-        )
-        """
-    )
-
-    # ------------------------------------------------------------------
-    # Datos de ejemplo: 3 usuarios con contrasenas en TEXTO PLANO
-    # (mala practica deliberada para demostrar en clase)
-    # ------------------------------------------------------------------
-    usuarios = [
-        ("admin", "admin123", "admin"),        # profesor administrador
-        ("profesor", "clave456", "docente"),   # profesor estandar
-        ("estudiante", "1234", "estudiante"),  # estudiante
-    ]
-    cur.executemany(
-        "INSERT INTO usuarios (username, password, rol) VALUES (?, ?, ?)",
-        usuarios,
-    )
-
-    # Datos de ejemplo: estudiantes
-    estudiantes = [
-        ("Ana Torres", "Ingenieria de Sistemas", "Estudiante de septimo semestre."),
-        ("Luis Gomez", "Ciberseguridad", "Interesado en pentesting."),
-        ("Maria Ruiz", "Ciencia de Datos", "Le gusta el machine learning."),
-    ]
-    cur.executemany(
-        "INSERT INTO estudiantes (nombre, carrera, biografia) VALUES (?, ?, ?)",
-        estudiantes,
-    )
-
-    # Datos de ejemplo: calificaciones
-    calificaciones = [
-        (1, "Redes", 4.2),
-        (1, "Bases de Datos", 3.8),
-        (2, "Criptografia", 4.7),
-        (3, "Estadistica", 3.5),
-    ]
-    cur.executemany(
-        "INSERT INTO calificaciones (estudiante_id, materia, nota) VALUES (?, ?, ?)",
-        calificaciones,
-    )
-
-    conn.commit()
-    conn.close()
-    print(f"Base de datos '{DB_NAME}' creada con datos de ejemplo.")
-
-
-if __name__ == "__main__":
-    init_db()

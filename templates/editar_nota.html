@@ -5,10 +5,10 @@
     <p><strong>Materia:</strong> {{ calificacion['materia'] }}</p>
     <p><strong>Estudiante ID:</strong> {{ calificacion['estudiante_id'] }}</p>
     <form method="POST" action="{{ url_for('editar_nota', id=calificacion['id']) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label>Nueva nota:
-            <input type="text" name="nota" value="{{ calificacion['nota'] }}">
+            <input type="number" name="nota" min="0" max="5" step="0.1" value="{{ calificacion['nota'] }}" required>
         </label>
         <button type="submit">Guardar</button>
     </form>
-    <p class="pista">Pista de laboratorio: cambia el numero de la URL (por ejemplo /nota/editar/1 -&gt; /nota/editar/2) sin iniciar sesion.</p>
 {% endblock %}

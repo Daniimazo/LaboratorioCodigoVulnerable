@@ -2,17 +2,15 @@
 {% block title %}Iniciar sesion{% endblock %}
 {% block contenido %}
     <h1>Iniciar sesion</h1>
-    {% if error %}
-        <p class="error">{{ error }}</p>
-    {% endif %}
     <form method="POST" action="{{ url_for('login') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <label>Usuario:
-            <input type="text" name="username" autocomplete="off">
+            <input type="text" name="username" autocomplete="username" required>
         </label>
         <label>Contrasena:
-            <input type="text" name="password" autocomplete="off">
+            <input type="password" name="password" autocomplete="current-password" required>
         </label>
         <button type="submit">Entrar</button>
     </form>
-    <p class="pista">Pista de laboratorio: prueba escribir <code>admin' --</code> en el campo usuario.</p>
+    <p>Usa una cuenta creada por el administrador del sistema.</p>
 {% endblock %}
