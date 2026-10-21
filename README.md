@@ -111,15 +111,90 @@ El perfil del estudiante se identifica por `usuarios.estudiante_id`, no por coin
 | `LOGIN_ACCOUNT_FAILURES` | Fallos antes de bloquear cuenta | 5 |
 | `LOGIN_ADDRESS_FAILURES` | Fallos antes de bloquear dirección | 20 |
 
-Ejemplo de configuración para PowerShell en despliegue con HTTPS:
+## Despliegue con Docker y HTTPS
 
-```powershell
-$env:SECRET_KEY = python -c "import secrets; print(secrets.token_hex(32))"
-$env:APP_ENV = "production"
-python app.py
+La configuración de despliegue usa esta arquitectura:
+
+```text
+Navegador --HTTPS--> Ngrok (certificado público) == túnel cifrado ==> Caddy (127.0.0.1:8080)
+                                                                       `-- red privada --> Gunicorn/Flask (8000) -- /metrics --> Prometheus
+                                                                            |-- volumen academia_data
+                                                                            `-- volumen upload_data
 ```
 
-En producción usa un servidor WSGI detrás de HTTPS, mantiene el secreto estable entre procesos, restringe el acceso a SQLite y a `uploads/`, y no ejecutes el script de cuentas demo.
+Caddy funciona como proxy inverso local. En esta configuración, Ngrok termina HTTPS usando el certificado de su dominio y reenvía el tráfico por su túnel al puerto local 8080; Caddy lo pasa a Flask por la red privada. El contenedor `web` no publica el puerto 8000 en el host y Caddy solo está enlazado a `127.0.0.1`, no a todas las interfaces. La aplicación corre con Gunicorn, como usuario sin privilegios, con sistema de archivos de solo lectura excepto los volúmenes persistentes y `/tmp`.
+
+### Preparar el dominio y los secretos
+
+1. Copia la plantilla de variables y edítala. No subas `.env` al repositorio.
+
+```powershell
+Copy-Item .env.example .env
+```
+
+2. En `.env`, conserva el dominio Ngrok que proporcionaste o reemplázalo por el que te asignaron. Genera un secreto aleatorio:
+
+```powershell
+python -c "import secrets; print(secrets.token_hex(32))"
+```
+
+Pega el resultado como valor de `SECRET_KEY`. No uses el valor de ejemplo en `.env.example` como secreto real. El token de Ngrok se configura en la herramienta Ngrok y no debe copiarse a este repositorio.
+
+### Construir e iniciar
+
+Desde la carpeta del proyecto, con Docker Desktop activo, inicia la aplicación y Caddy:
+
+```powershell
+docker compose up --build -d
+docker compose logs -f caddy web
+```
+
+En una segunda terminal, configura el token de Ngrok una sola vez y abre el túnel hacia Caddy:
+
+```powershell
+ngrok config add-authtoken TU_TOKEN_DE_NGROK
+ngrok http 8080 --url https://trench-operable-entire.ngrok-free.dev
+```
+
+El token se obtiene en el panel de Ngrok; no lo publiques ni lo pongas en archivos del proyecto. Cuando el túnel indique que está activo, abre <https://trench-operable-entire.ngrok-free.dev>. Ngrok proporciona HTTPS en el acceso público. La aplicación arranca en modo producción, por lo que `ProductionConfig` exige `SECRET_KEY` y activa `Secure` en la cookie de sesión.
+
+La base de datos, los archivos cargados y las métricas históricas viven en volúmenes nombrados. Para detener los servicios sin borrar datos:
+
+```powershell
+docker compose down
+```
+
+No uses `docker compose down -v` salvo que quieras borrar deliberadamente esos datos. Para revisar registros utiliza `docker compose logs -f web caddy`.
+
+### Crear la primera cuenta administrativa
+
+El contenedor inicializa las tablas, pero no crea usuarios demo. No ejecutes `scripts/seed_demo_users.py` en producción: sus contraseñas son públicas y el script las restablece. Crea una cuenta administrativa introduciendo la contraseña de forma interactiva:
+
+```powershell
+docker compose exec web python -c "from app import app; from database import create_user; from getpass import getpass; ctx=app.app_context(); ctx.push(); create_user(input('Usuario administrador: '), getpass('Contraseña (mínimo 12 caracteres): '), 'admin')"
+```
+
+### Prometheus y métricas
+
+`prometheus-flask-exporter` instrumenta las solicitudes Flask y publica métricas HTTP en `/metrics`. `monitoring/prometheus.yml` configura una consulta cada 15 segundos al destino `web:8000`, que Docker resuelve por nombre de servicio. Se agrupa por endpoint de Flask en vez de URL concreta para evitar crear una serie distinta por cada ID de perfil.
+
+Prometheus guarda su historial en el volumen `prometheus_data`. Su interfaz queda enlazada a `127.0.0.1:9090`, por lo que se consulta desde esta máquina en <http://localhost:9090>; no se publica por Caddy ni por Ngrok. Caddy devuelve 404 para `/metrics` en la entrada pública, mientras que Prometheus accede directamente al servicio `web` dentro de la red Docker. En la página **Status → Targets**, el trabajo `gestion-academica` debe quedar `UP`. En **Graph**, se puede consultar `flask_http_request_total`.
+
+Las métricas deben contener información agregada de operación, no nombres, biografías, contraseñas ni identificadores de estudiantes.
+
+### Estrategia HTTPS y operación
+
+- El navegador negocia TLS con Ngrok. El agente Ngrok mantiene el túnel cifrado hasta la máquina; en ella el tráfico se entrega a Caddy por `127.0.0.1:8080` y luego a Gunicorn por la red interna.
+- El puerto de Flask no se publica y el puerto local de Caddy no escucha en la red externa, reduciendo el riesgo de saltarse el proxy.
+- Se habilitan cookies `HttpOnly`, `SameSite=Lax` y `Secure`, además de cabeceras de protección en Caddy.
+- Mantén `.env` y el token de Ngrok fuera de Git, restringe quién puede administrar Docker y respalda los volúmenes `academia_data`, `upload_data` y `prometheus_data`.
+- Esta configuración conserva SQLite para una demostración de instancia única. Para varias réplicas o más concurrencia, cambia la base a PostgreSQL y usa migraciones versionadas.
+
+El enlace Ngrok es adecuado para demostración y acceso temporal. La URL depende de que el agente Ngrok permanezca ejecutándose. Para un despliegue permanente, usa un dominio propio o contratado, DNS hacia el servidor y deja que Caddy gestione directamente certificados públicos en 80/443; esa arquitectura requiere cambiar el mapeo de puertos y el bloque del `Caddyfile`.
+
+## 3. Gestión de riesgos
+
+OWASP ZAP reportó tres alertas pasivas relacionadas con encabezados HTTP: ausencia de `X-Content-Type-Options` (riesgo bajo), ausencia de `Strict-Transport-Security` (riesgo bajo) y revisión de directivas `Cache-Control` (informativa). La aplicación establece `X-Content-Type-Options: nosniff` y una política de no almacenamiento en caché en las respuestas Flask. Caddy aplica esas directivas y HSTS en el acceso público HTTPS. Después de reconstruir el despliegue (`docker compose up --build -d`), repite el escaneo pasivo de ZAP y revisa las respuestas de `/`, `/robots.txt` y `/sitemap.xml`.
 
 ## Inicialización y cuentas propias
 

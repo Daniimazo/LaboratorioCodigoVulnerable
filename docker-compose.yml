@@ -1,0 +1,56 @@
+services:
+  web:
+    build: .
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      DATABASE_PATH: /data/academia.db
+      UPLOAD_FOLDER: /app/uploads
+      SESSION_COOKIE_SECURE: "1"
+    volumes:
+      - academia_data:/data
+      - upload_data:/app/uploads
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    depends_on:
+      - web
+    ports:
+      - "127.0.0.1:8080:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - web
+    restart: unless-stopped
+
+volumes:
+  academia_data:
+  upload_data:
+  caddy_data:
+  caddy_config:
+  prometheus_data:

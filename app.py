@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from flask import Flask, abort, flash, redirect, render_template, request, session, url_for
 from flask_login import current_user, login_required, login_user, logout_user
+from prometheus_flask_exporter import PrometheusMetrics
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -32,6 +33,11 @@ if os.environ.get("APP_ENV", "development").lower() == "production":
     app.config.from_object(ProductionConfig)
 db.init_app(app)
 login_manager.init_app(app)
+metrics = PrometheusMetrics(
+    app,
+    group_by="endpoint",
+    excluded_paths=[r"/metrics"],
+)
 
 ALLOWED_EXTENSIONS = {"pdf", "png", "jpg", "jpeg"}
 EDIT_ROLES = {"admin", "docente"}
@@ -64,6 +70,16 @@ def csrf_token():
 
 
 app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+@app.after_request
+def add_security_response_headers(response):
+    """Apply browser safety and private-content cache policy to every response."""
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Cache-Control", "no-cache, no-store, must-revalidate")
+    response.headers.setdefault("Pragma", "no-cache")
+    response.headers.setdefault("Expires", "0")
+    return response
 
 
 @app.context_processor
